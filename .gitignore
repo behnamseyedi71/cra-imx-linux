@@ -1,0 +1,40 @@
+# ── Build output (gigabytes, never commit) ────────────────────────────────────
+build-edgeos-headless/tmp/
+build-edgeos-headless/sstate-cache/
+build-edgeos-headless/cache/
+build-edgeos-headless/bitbake-cookerdaemon.log
+build-edgeos-headless/bitbake.lock
+build-edgeos-headless/bitbake.sock
+build-edgeos-headless/*.log
+
+# ── Auto-generated build conf backups ────────────────────────────────────────
+build-edgeos-headless/conf/*.org
+build-edgeos-headless/conf/*.sample
+build-edgeos-headless/conf/conf-notes.txt
+build-edgeos-headless/conf/conf-summary.txt
+build-edgeos-headless/conf/templateconf.cfg
+
+# ── Downloaded source archives ────────────────────────────────────────────────
+downloads/
+
+# ── Upstream layers managed by repo tool (not ours to commit) ────────────────
+sources/poky/
+sources/meta-openembedded/
+sources/meta-clang/
+sources/base/
+sources/meta-freescale/
+sources/meta-freescale-3rdparty/
+sources/meta-freescale-distro/
+sources/meta-arm/
+sources/meta-qt6/
+sources/meta-browser/
+sources/meta-security/
+sources/meta-timesys/
+sources/meta-virtualization/
+sources/meta-imx/
+sources/meta-nxp-connectivity/
+sources/meta-nxp-demo-experience/
+sources/meta-ros/
+
+# ── repo tool internal state ──────────────────────────────────────────────────
+.repo/
