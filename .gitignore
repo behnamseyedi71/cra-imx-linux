@@ -36,5 +36,11 @@ sources/meta-nxp-connectivity/
 sources/meta-nxp-demo-experience/
 sources/meta-ros/
 
+# ── Workspace-level caches (moved out of build dir for persistence) ──────────
+sstate-cache/
+
 # ── repo tool internal state ──────────────────────────────────────────────────
 .repo/
+
+# ── Claude Code memory / session state ───────────────────────────────────────
+.claude/
