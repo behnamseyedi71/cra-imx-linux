@@ -83,6 +83,17 @@ IMAGE_INSTALL:append = " \
     edgeos-demo \
 "
 
+# ── Performance control ───────────────────────────────────────────────────────
+# edgeos-perfctl   : locks A53 cores at 1800 MHz, disables idle states,
+#                    maximises GPU/NPU/DDR devfreq — with live monitor
+# cpufrequtils     : cpufreq-info / cpufreq-set (standard Linux CPU freq tools)
+# cpupower         : cpupower frequency-set / idle-set (kernel power interface)
+IMAGE_INSTALL:append = " \
+    edgeos-perfctl \
+    cpufrequtils \
+    cpupower \
+"
+
 # ── Industrial CAN bus + networking ──────────────────────────────────────────
 IMAGE_INSTALL:append = " \
     can-utils \

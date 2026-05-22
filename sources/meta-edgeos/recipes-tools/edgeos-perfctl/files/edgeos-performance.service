@@ -1,0 +1,12 @@
+[Unit]
+Description=EdgeOS — lock CPU/GPU/NPU/DDR to maximum frequency
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/edgeos-perfctl max
+ExecStop=/usr/bin/edgeos-perfctl balanced
+
+[Install]
+WantedBy=multi-user.target

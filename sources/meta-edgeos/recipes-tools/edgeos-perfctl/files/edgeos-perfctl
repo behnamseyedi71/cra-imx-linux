@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""
+edgeos-perfctl — CPU, GPU, NPU and memory frequency control for i.MX8MP
+
+Usage:
+  edgeos-perfctl status       Show current frequencies, governors, temperatures
+  edgeos-perfctl max          Lock everything at maximum frequency (performance)
+  edgeos-perfctl balanced     Return to automatic scaling (schedutil)
+  edgeos-perfctl monitor      Live dashboard: frequencies + temperatures
+  edgeos-perfctl idle off     Disable CPU deep-sleep idle states (lowest latency)
+  edgeos-perfctl idle on      Re-enable CPU idle states (saves power)
+  edgeos-perfctl help         Show this message
+
+Notes:
+  - 'max' mode locks all 4 A53 cores at 1800 MHz and GPU/NPU/DDR at peak.
+  - 'max' increases power draw and board temperature — ensure adequate cooling.
+  - The i.MX8MP A53 hard ceiling is 1800 MHz (NXP silicon specification).
+    Going beyond requires DT changes and risks hardware damage.
+  - Run 'systemctl enable edgeos-performance' to apply 'max' on every boot.
+"""
+
+import os, sys, glob, time, argparse, subprocess
+
+# ── Sysfs helpers ──────────────────────────────────────────────────────────────
+
+def write_sysfs(path, value):
+    try:
+        with open(path, 'w') as f:
+            f.write(str(value))
+        return True
+    except PermissionError:
+        print(f"  ERROR: Permission denied writing {path}. Run as root.")
+        return False
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        print(f"  WARNING: {path}: {e}")
+        return False
+
+
+def read_sysfs(path, default="N/A"):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except Exception:
+        return default
+
+
+def read_int(path, default=0):
+    try:
+        return int(read_sysfs(path))
+    except Exception:
+        return default
+
+
+# ── CPU frequency ──────────────────────────────────────────────────────────────
+
+def cpu_paths():
+    return sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq"))
+
+
+def set_cpu_governor(governor):
+    paths = cpu_paths()
+    if not paths:
+        print("  WARNING: No cpufreq interfaces found. Is the kernel driver loaded?")
+        return
+    ok = 0
+    for p in paths:
+        if write_sysfs(f"{p}/scaling_governor", governor):
+            ok += 1
+    print(f"  CPU governor → {governor} ({ok}/{len(paths)} cores)")
+
+
+def get_cpu_info():
+    rows = []
+    for p in cpu_paths():
+        cpu  = p.split("/cpu/")[1].split("/")[0]
+        gov  = read_sysfs(f"{p}/scaling_governor")
+        cur  = read_int(f"{p}/scaling_cur_freq")
+        mn   = read_int(f"{p}/cpuinfo_min_freq")
+        mx   = read_int(f"{p}/cpuinfo_max_freq")
+        rows.append((cpu, gov, cur // 1000, mn // 1000, mx // 1000))
+    return rows
+
+
+# ── CPU idle states ────────────────────────────────────────────────────────────
+
+def idle_state_paths():
+    return sorted(glob.glob("/sys/devices/system/cpu/cpu*/cpuidle/state*"))
+
+
+def set_idle_states(enabled):
+    # enabled=True  → allow idle (normal)
+    # enabled=False → disable idle (minimum latency)
+    disable_val = "0" if enabled else "1"
+    count = 0
+    for p in idle_state_paths():
+        name = read_sysfs(f"{p}/name", "")
+        # Skip WFI (state0) — that's just a normal halt, always needed
+        if name in ("WFI", ""):
+            continue
+        disable_file = f"{p}/disable"
+        if os.path.exists(disable_file):
+            write_sysfs(disable_file, disable_val)
+            count += 1
+    state = "disabled (low-latency mode)" if not enabled else "enabled (normal power)"
+    print(f"  CPU deep-idle states → {state} ({count} states affected)")
+
+
+def get_idle_info():
+    rows = []
+    for p in sorted(glob.glob("/sys/devices/system/cpu/cpu0/cpuidle/state*")):
+        name    = read_sysfs(f"{p}/name",    "?")
+        latency = read_sysfs(f"{p}/latency", "?")
+        disable = read_sysfs(f"{p}/disable", "?")
+        rows.append((name, latency, "disabled" if disable == "1" else "active"))
+    return rows
+
+
+# ── devfreq (GPU / NPU / DDR) ─────────────────────────────────────────────────
+
+DEVFREQ_NAMES = {
+    "gpu": "GPU (Vivante GC7000UL)",
+    "npu": "NPU (dual-core ML)",
+    "ddr": "LPDDR4 memory bus",
+    "bus": "AXI/AHB bus",
+    "vpu": "VPU (video codec)",
+}
+
+
+def devfreq_paths():
+    paths = {}
+    for p in glob.glob("/sys/class/devfreq/*"):
+        name = os.path.basename(p).lower()
+        for key in DEVFREQ_NAMES:
+            if key in name:
+                paths[p] = DEVFREQ_NAMES[key]
+                break
+        else:
+            paths[p] = os.path.basename(p)
+    return paths
+
+
+def set_devfreq_governor(governor):
+    paths = devfreq_paths()
+    if not paths:
+        print("  INFO: No devfreq devices found (GPU/NPU/DDR scaling unavailable).")
+        return
+    for p, label in paths.items():
+        avail = read_sysfs(f"{p}/available_governors", "")
+        if governor not in avail and avail:
+            # Fall back to 'userspace' + set max freq manually
+            if "userspace" in avail:
+                write_sysfs(f"{p}/governor", "userspace")
+                max_hz = read_sysfs(f"{p}/max_freq", "0")
+                write_sysfs(f"{p}/userspace/set_freq", max_hz)
+                print(f"  {label:<35} → userspace @ max ({int(max_hz)//1000000} MHz)")
+            continue
+        if write_sysfs(f"{p}/governor", governor):
+            cur = read_int(f"{p}/cur_freq")
+            print(f"  {label:<35} → {governor} ({cur // 1000000} MHz)")
+
+
+def get_devfreq_info():
+    rows = []
+    for p, label in devfreq_paths().items():
+        gov = read_sysfs(f"{p}/governor", "N/A")
+        cur = read_int(f"{p}/cur_freq")
+        mn  = read_int(f"{p}/min_freq")
+        mx  = read_int(f"{p}/max_freq")
+        rows.append((label, gov, cur // 1000000, mn // 1000000, mx // 1000000))
+    return rows
+
+
+# ── Thermal zones ──────────────────────────────────────────────────────────────
+
+def get_thermal_info():
+    rows = []
+    for p in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
+        ttype = read_sysfs(f"{p}/type",  "zone")
+        temp  = read_int(f"{p}/temp")
+        rows.append((ttype, temp / 1000.0))
+    return rows
+
+
+# ── Commands ───────────────────────────────────────────────────────────────────
+
+def cmd_status():
+    W = 62
+    print("┌" + "─" * W + "┐")
+    print(f"│  edgeos-perfctl — i.MX8MP Performance Status{' '*(W-46)}│")
+    print("├" + "─" * W + "┤")
+
+    print(f"│  {'CPU CORES':<{W-2}}│")
+    print(f"│  {'Core':<8} {'Governor':<14} {'Cur':>6} {'Min':>6} {'Max':>6} MHz   │")
+    print(f"│  {'─'*56}   │")
+    for cpu, gov, cur, mn, mx in get_cpu_info():
+        bar = "▓" * (cur * 10 // mx) + "░" * (10 - cur * 10 // mx) if mx else ""
+        print(f"│  {cpu:<8} {gov:<14} {cur:>6} {min:>6} {mx:>6}  {bar}  │".replace("min", str(mn)))
+
+    idle = get_idle_info()
+    if idle:
+        print("├" + "─" * W + "┤")
+        print(f"│  {'CPU IDLE STATES (cpu0)':<{W-2}}│")
+        for name, lat, state in idle:
+            print(f"│  {name:<12} latency={lat:>4} µs  {state:<28}│")
+
+    devfreq = get_devfreq_info()
+    if devfreq:
+        print("├" + "─" * W + "┤")
+        print(f"│  {'DEVFREQ (GPU / NPU / DDR)':<{W-2}}│")
+        print(f"│  {'Device':<35} {'Gov':<12} {'Cur':>5} MHz  │")
+        print(f"│  {'─'*56}   │")
+        for label, gov, cur, mn, mx in devfreq:
+            print(f"│  {label:<35} {gov:<12} {cur:>5}      │")
+
+    thermal = get_thermal_info()
+    if thermal:
+        print("├" + "─" * W + "┤")
+        print(f"│  {'THERMAL ZONES':<{W-2}}│")
+        for ttype, temp in thermal:
+            bar   = "█" * min(20, int(temp / 5))
+            color = "HOT  " if temp > 80 else ("WARM " if temp > 60 else "OK   ")
+            print(f"│  {ttype:<25} {temp:>5.1f} °C  {color}  {bar:<20}  │")
+
+    print("└" + "─" * W + "┘")
+
+
+def cmd_max():
+    print("Setting i.MX8MP to maximum performance mode ...")
+    print()
+    set_cpu_governor("performance")
+    set_idle_states(False)
+    set_devfreq_governor("performance")
+    print()
+    print("Done. All cores locked at 1800 MHz.")
+    print("NOTE: Monitor temperature — ensure EVK heatsink/fan is functional.")
+    print("      Run 'edgeos-perfctl status' to verify or 'edgeos-perfctl monitor' to watch live.")
+
+
+def cmd_balanced():
+    print("Returning to automatic scaling (balanced/schedutil) ...")
+    print()
+    set_cpu_governor("schedutil")
+    set_idle_states(True)
+    set_devfreq_governor("simple_ondemand")
+    print()
+    print("Done. Governors restored to automatic scaling.")
+
+
+def cmd_idle(enable):
+    if os.geteuid() != 0:
+        sys.exit("ERROR: Must run as root to change idle states.")
+    set_idle_states(enable)
+
+
+def cmd_monitor():
+    print("Live monitor — Ctrl+C to stop\n")
+    try:
+        while True:
+            print("\033[2J\033[H", end="")
+            print(f"  edgeos-perfctl monitor   {time.strftime('%H:%M:%S')}   (Ctrl+C to exit)")
+            print()
+
+            cpus = get_cpu_info()
+            print(f"  CPU  {'Core':<6} {'MHz':>6}  {'Governor':<14}  Bar")
+            for cpu, gov, cur, mn, mx in cpus:
+                if mx:
+                    pct = cur / mx
+                    bar = "█" * int(pct * 20) + "░" * (20 - int(pct * 20))
+                else:
+                    bar = "?"
+                print(f"       {cpu:<6} {cur:>6}  {gov:<14}  {bar}  {pct*100:.0f}%")
+
+            print()
+            thermal = get_thermal_info()
+            print(f"  TEMP {'Zone':<25}  {'°C':>6}  Status")
+            for ttype, temp in thermal:
+                status = "⚠ HOT" if temp > 85 else ("↑ WARM" if temp > 65 else "✓ OK")
+                bar    = "█" * min(25, int(temp / 4))
+                print(f"       {ttype:<25}  {temp:>5.1f}  {status}  {bar}")
+
+            devfreq = get_devfreq_info()
+            if devfreq:
+                print()
+                print(f"  DEV  {'Device':<30}  {'MHz':>5}  {'Governor'}")
+                for label, gov, cur, mn, mx in devfreq:
+                    print(f"       {label:<30}  {cur:>5}  {gov}")
+
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+def main():
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("command", nargs="?", default="status")
+    p.add_argument("arg",     nargs="?", default=None)
+    args = p.parse_args()
+
+    cmd = args.command.lower()
+
+    if cmd in ("status", "s"):
+        cmd_status()
+    elif cmd in ("max", "performance"):
+        if os.geteuid() != 0:
+            sys.exit("ERROR: Must run as root.")
+        cmd_max()
+    elif cmd in ("balanced", "auto", "normal"):
+        if os.geteuid() != 0:
+            sys.exit("ERROR: Must run as root.")
+        cmd_balanced()
+    elif cmd == "idle":
+        sub = (args.arg or "").lower()
+        if sub == "off":
+            cmd_idle(False)
+        elif sub == "on":
+            cmd_idle(True)
+        else:
+            sys.exit("Usage: edgeos-perfctl idle on|off")
+    elif cmd in ("monitor", "mon", "watch"):
+        cmd_monitor()
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()
