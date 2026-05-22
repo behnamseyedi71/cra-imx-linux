@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""
+EdgeOS System & ML Benchmark
+Tests CPU, memory, storage I/O, and YOLOv8n inference performance.
+
+Usage:
+  edgeos-benchmark              # run all benchmarks
+  edgeos-benchmark --quick      # shorter runs (fewer iterations)
+  edgeos-benchmark --no-ml      # skip ML benchmark (faster)
+"""
+
+import os, sys, time, argparse, platform, subprocess, array
+
+os.environ.setdefault("YOLO_SKIP_TORCH_CHECK", "1")
+
+MODEL_DIR  = "/var/lib/edgeos-demo"
+MODEL_FILE = os.path.join(MODEL_DIR, "yolov8n.onnx")
+MODEL_URL  = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx"
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="EdgeOS system and ML benchmark")
+    p.add_argument("--quick", action="store_true", help="Shorter runs, fewer iterations")
+    p.add_argument("--no-ml", action="store_true", help="Skip ML inference benchmark")
+    return p.parse_args()
+
+
+def run_cmd(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, text=True).strip()
+    except Exception:
+        return "N/A"
+
+
+def divider(char="─", width=60):
+    print(char * width)
+
+
+def header(title):
+    divider()
+    print(f"  {title}")
+    divider()
+
+
+def section_result(label, value, unit=""):
+    print(f"  {label:<35} {value} {unit}")
+
+
+# ── System info ───────────────────────────────────────────────────────────────
+
+def bench_sysinfo():
+    header("SYSTEM INFORMATION")
+    section_result("Hostname",        run_cmd("hostname"))
+    section_result("OS",              run_cmd("cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'"))
+    section_result("Kernel",          platform.release())
+    section_result("Architecture",    platform.machine())
+    section_result("CPU model",       run_cmd("grep 'model name\\|Hardware' /proc/cpuinfo | head -1 | cut -d: -f2").strip() or "N/A")
+    section_result("CPU cores",       str(os.cpu_count()))
+    section_result("CPU max freq",    run_cmd("cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq 2>/dev/null | awk '{printf \"%.0f MHz\", $1/1000}'") or "N/A")
+
+    mem_kb = int(run_cmd("grep MemTotal /proc/meminfo | awk '{print $2}'") or 0)
+    mem_gb = mem_kb / 1024 / 1024
+    section_result("Total RAM",       f"{mem_gb:.1f} GB")
+
+    free_kb = int(run_cmd("grep MemAvailable /proc/meminfo | awk '{print $2}'") or 0)
+    section_result("Available RAM",   f"{free_kb / 1024:.0f} MB")
+
+    disk = run_cmd("df -h / | tail -1 | awk '{print $2\" total, \"$4\" free\"}'")
+    section_result("Root disk",       disk)
+
+
+# ── CPU benchmark ─────────────────────────────────────────────────────────────
+
+def bench_cpu(quick=False):
+    header("CPU BENCHMARK — Float arithmetic (single core)")
+
+    N = 2_000_000 if quick else 10_000_000
+    print(f"  Running {N/1e6:.0f}M iterations of mixed float ops ...")
+
+    t0 = time.perf_counter()
+    x = 1.0
+    for _ in range(N):
+        x = x * 1.0000003 + 0.0000001 - x * 0.0000002
+    elapsed = time.perf_counter() - t0
+
+    mops = N / elapsed / 1e6
+    section_result("Duration",     f"{elapsed:.2f} s")
+    section_result("Throughput",   f"{mops:.1f} MOPS",  "(million ops/sec)")
+
+    # Multi-core estimate using os.cpu_count scaling
+    section_result("CPU cores",    str(os.cpu_count()))
+    section_result("Est. all-core",f"~{mops * os.cpu_count():.0f} MOPS", "(theoretical)")
+
+
+# ── Memory bandwidth ──────────────────────────────────────────────────────────
+
+def bench_memory(quick=False):
+    header("MEMORY BENCHMARK — Sequential bandwidth")
+
+    SIZE_MB = 32 if quick else 128
+    SIZE    = SIZE_MB * 1024 * 1024
+    COUNT   = SIZE // 4  # float32 elements
+
+    print(f"  Allocating {SIZE_MB} MB buffer ...")
+    data = array.array('f', bytes(SIZE))
+
+    # Write
+    t0 = time.perf_counter()
+    for i in range(0, COUNT, 512):
+        data[i] = float(i)
+    write_bw = SIZE / (time.perf_counter() - t0) / 1e9
+
+    # Read
+    t0 = time.perf_counter()
+    s = 0.0
+    for i in range(0, COUNT, 512):
+        s += data[i]
+    read_bw = SIZE / (time.perf_counter() - t0) / 1e9
+
+    section_result("Buffer size",  f"{SIZE_MB} MB")
+    section_result("Write speed",  f"{write_bw:.2f} GB/s")
+    section_result("Read speed",   f"{read_bw:.2f} GB/s")
+    _ = s  # prevent optimizer removal
+
+
+# ── Storage I/O ───────────────────────────────────────────────────────────────
+
+def bench_storage(quick=False):
+    header("STORAGE I/O BENCHMARK — Sequential write/read")
+
+    SIZE_MB = 32 if quick else 128
+    chunk   = 4 * 1024 * 1024  # 4 MB chunks
+    path    = "/tmp/edgeos_bench_tmp"
+    data    = b'\xAB' * chunk
+    total   = SIZE_MB * 1024 * 1024
+
+    print(f"  Writing {SIZE_MB} MB to /tmp ...")
+    t0 = time.perf_counter()
+    written = 0
+    with open(path, 'wb') as f:
+        while written < total:
+            f.write(data[:min(chunk, total - written)])
+            written += chunk
+        os.fsync(f.fileno())
+    write_bw = total / (time.perf_counter() - t0) / 1e6
+
+    print(f"  Reading back ...")
+    t0 = time.perf_counter()
+    with open(path, 'rb') as f:
+        while f.read(chunk):
+            pass
+    read_bw = total / (time.perf_counter() - t0) / 1e6
+
+    os.remove(path)
+    section_result("Write speed",  f"{write_bw:.1f} MB/s")
+    section_result("Read speed",   f"{read_bw:.1f} MB/s")
+
+
+# ── ONNX Runtime info ─────────────────────────────────────────────────────────
+
+def bench_ort_info():
+    header("ONNX RUNTIME")
+    try:
+        import onnxruntime as ort
+        section_result("Version",          ort.__version__)
+        section_result("Execution providers", ", ".join(ort.get_available_providers()))
+    except ImportError:
+        section_result("Status", "NOT INSTALLED")
+
+
+# ── ML inference ──────────────────────────────────────────────────────────────
+
+def ensure_model():
+    if os.path.exists(MODEL_FILE):
+        return MODEL_FILE
+    print(f"  Model not at {MODEL_FILE} — downloading (~12 MB) ...")
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    try:
+        import urllib.request
+        tmp = MODEL_FILE + ".tmp"
+        def prog(c, b, t):
+            print(f"\r  {min(100, c*b*100//t)}% ", end="", flush=True)
+        urllib.request.urlretrieve(MODEL_URL, tmp, reporthook=prog)
+        print()
+        os.rename(tmp, MODEL_FILE)
+    except Exception as e:
+        print(f"\n  Download failed: {e}")
+        print(f"  Copy model manually: scp yolov8n.onnx root@<board>:{MODEL_FILE}")
+        return None
+    return MODEL_FILE
+
+
+def bench_ml(quick=False):
+    header("ML INFERENCE BENCHMARK — YOLOv8n ONNX (CPU)")
+
+    try:
+        import numpy as np
+        from ultralytics import YOLO
+    except ImportError as e:
+        section_result("Status", f"SKIP ({e})")
+        return
+
+    model_path = ensure_model()
+    if model_path is None:
+        section_result("Status", "SKIP (model unavailable)")
+        return
+
+    print(f"  Loading {model_path} ...")
+    model = YOLO(model_path, task="detect")
+
+    resolutions = [(320, 240), (640, 480)] if not quick else [(320, 240)]
+
+    for w, h in resolutions:
+        dummy = np.zeros((h, w, 3), dtype=np.uint8)
+
+        # Warm-up
+        for _ in range(3):
+            model(dummy, verbose=False)
+
+        runs  = 10 if quick else 30
+        times = []
+        print(f"  Benchmarking {w}x{h} — {runs} runs ...")
+        for _ in range(runs):
+            t0 = time.perf_counter()
+            model(dummy, verbose=False)
+            times.append(time.perf_counter() - t0)
+
+        avg  = sum(times) / len(times)
+        best = min(times)
+        worst= max(times)
+        fps  = 1.0 / avg
+
+        print()
+        section_result(f"Resolution",           f"{w}x{h}")
+        section_result(f"Avg latency",           f"{avg*1000:.1f} ms")
+        section_result(f"Best / worst latency",  f"{best*1000:.1f} ms / {worst*1000:.1f} ms")
+        section_result(f"Throughput",            f"{fps:.2f} FPS")
+        print()
+
+
+# ── stress-ng hint ────────────────────────────────────────────────────────────
+
+def stress_hint():
+    header("HARDWARE STRESS TEST (stress-ng)")
+    if os.path.exists("/usr/bin/stress-ng"):
+        print("  stress-ng is installed. Example commands:")
+        print()
+        print("  # 30-second all-CPU stress test:")
+        print("  stress-ng --cpu 0 --timeout 30 --metrics-brief")
+        print()
+        print("  # Memory stress:")
+        print("  stress-ng --vm 2 --vm-bytes 512M --timeout 30")
+        print()
+        print("  # Full system stress:")
+        print("  stress-ng --all 0 --timeout 60 --metrics-brief")
+    else:
+        print("  stress-ng not found (should be pre-installed — check image build).")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    args = parse_args()
+    t_total = time.time()
+
+    divider("═")
+    print("  EdgeOS System & ML Benchmark")
+    print(f"  {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    divider("═")
+    print()
+
+    bench_sysinfo()
+    bench_cpu(quick=args.quick)
+    bench_memory(quick=args.quick)
+    bench_storage(quick=args.quick)
+    bench_ort_info()
+
+    if not args.no_ml:
+        bench_ml(quick=args.quick)
+
+    stress_hint()
+
+    divider()
+    print(f"  Total benchmark time: {time.time() - t_total:.0f}s")
+    divider()
+
+
+if __name__ == "__main__":
+    main()

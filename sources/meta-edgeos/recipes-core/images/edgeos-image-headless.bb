@@ -69,6 +69,20 @@ IMAGE_INSTALL:append = " \
     python3-ultralytics \
 "
 
+# ── Package manager compatibility ────────────────────────────────────────────
+# apt / apt-get wrapper maps familiar Debian commands to opkg
+IMAGE_INSTALL:append = " \
+    apt-compat \
+"
+
+# ── Demo applications ─────────────────────────────────────────────────────────
+# edgeos-detect    : USB webcam → YOLOv8n → live terminal detection output
+# edgeos-benchmark : CPU / memory / storage / ML inference benchmark
+# stress-ng        : hardware stress test (included via edgeos-demo RDEPENDS)
+IMAGE_INSTALL:append = " \
+    edgeos-demo \
+"
+
 # ── Industrial CAN bus + networking ──────────────────────────────────────────
 IMAGE_INSTALL:append = " \
     can-utils \

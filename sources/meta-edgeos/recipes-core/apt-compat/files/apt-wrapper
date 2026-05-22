@@ -1,0 +1,65 @@
+#!/bin/sh
+# apt / apt-get compatibility wrapper backed by opkg.
+# Provides a familiar interface for users coming from Ubuntu/Debian.
+
+PROG=$(basename "$0")
+CMD="${1:-help}"
+shift 2>/dev/null || true
+
+case "$CMD" in
+    update)
+        opkg update
+        ;;
+    upgrade)
+        opkg upgrade "$@"
+        ;;
+    install)
+        opkg install "$@"
+        ;;
+    remove|purge)
+        opkg remove "$@"
+        ;;
+    autoremove)
+        opkg remove --autoremove "$@"
+        ;;
+    search)
+        opkg find "$@"
+        ;;
+    show|info)
+        opkg info "$@"
+        ;;
+    list)
+        case "${1:-}" in
+            --installed|-i) shift; opkg list-installed "$@" ;;
+            *) opkg list "$@" ;;
+        esac
+        ;;
+    list-installed)
+        opkg list-installed "$@"
+        ;;
+    clean|autoclean)
+        rm -rf /var/cache/opkg/*
+        ;;
+    --version|-v)
+        echo "$PROG (EdgeOS apt-opkg wrapper) 1.0"
+        opkg --version
+        ;;
+    help|--help|-h|*)
+        cat <<EOF
+Usage: $PROG <command> [options]
+
+  $PROG update              Refresh package lists from feed
+  $PROG upgrade             Upgrade all installed packages
+  $PROG install <pkg ...>   Install one or more packages
+  $PROG remove  <pkg ...>   Remove packages
+  $PROG search  <term>      Search available packages
+  $PROG show    <pkg>       Show package details
+  $PROG list    [--installed]  List packages
+  $PROG clean               Clear download cache
+
+This is a wrapper around opkg. To enable remote packages, add your
+feed URL to /etc/opkg/opkg.conf:
+  src/gz edgeos http://<server>/ipk
+EOF
+        ;;
+esac

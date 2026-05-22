@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+EdgeOS Object Detection Demo
+USB webcam → YOLOv8n inference → live terminal output
+
+Usage:
+  edgeos-detect                  # default camera /dev/video0
+  edgeos-detect --camera 1       # use /dev/video1
+  edgeos-detect --conf 0.3       # lower confidence threshold
+  edgeos-detect --width 320 --height 240   # lower resolution for more FPS
+  edgeos-detect --list-cameras   # show available video devices
+"""
+
+import os, sys, time, argparse
+
+os.environ.setdefault("YOLO_SKIP_TORCH_CHECK", "1")
+
+MODEL_DIR  = "/var/lib/edgeos-demo"
+MODEL_FILE = os.path.join(MODEL_DIR, "yolov8n.onnx")
+MODEL_URL  = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx"
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="EdgeOS USB webcam object detection")
+    p.add_argument("--camera",       type=int,   default=0,    help="Camera index (default: 0)")
+    p.add_argument("--conf",         type=float, default=0.40, help="Confidence threshold 0-1 (default: 0.40)")
+    p.add_argument("--width",        type=int,   default=640,  help="Capture width (default: 640)")
+    p.add_argument("--height",       type=int,   default=480,  help="Capture height (default: 480)")
+    p.add_argument("--list-cameras", action="store_true",      help="List available video devices and exit")
+    return p.parse_args()
+
+
+def list_cameras():
+    import glob
+    devices = sorted(glob.glob("/dev/video*"))
+    if not devices:
+        print("No video devices found.")
+        return
+    print("Available video devices:")
+    for d in devices:
+        print(f"  {d}")
+
+
+def ensure_model():
+    if os.path.exists(MODEL_FILE):
+        return MODEL_FILE
+
+    print(f"Model not found at {MODEL_FILE}")
+    print(f"Downloading YOLOv8n ONNX model (~12 MB) ...")
+
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    try:
+        import urllib.request
+        tmp = MODEL_FILE + ".tmp"
+        def progress(count, block, total):
+            pct = min(100, count * block * 100 // total)
+            print(f"\r  {pct}% ", end="", flush=True)
+        urllib.request.urlretrieve(MODEL_URL, tmp, reporthook=progress)
+        print()
+        os.rename(tmp, MODEL_FILE)
+        print(f"Model saved to {MODEL_FILE}")
+    except Exception as e:
+        print(f"\nDownload failed: {e}")
+        print()
+        print("To download manually on another machine:")
+        print(f"  wget {MODEL_URL}")
+        print(f"  scp yolov8n.onnx root@<board-ip>:{MODEL_FILE}")
+        sys.exit(1)
+
+    return MODEL_FILE
+
+
+def clear_screen():
+    print("\033[2J\033[H", end="", flush=True)
+
+
+def run(args):
+    try:
+        import cv2
+    except ImportError:
+        sys.exit("ERROR: OpenCV not found. Run: apt install python3-opencv")
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        sys.exit("ERROR: ultralytics not found. Run: apt install python3-ultralytics")
+
+    model_path = ensure_model()
+
+    print(f"Loading model: {model_path}")
+    model = YOLO(model_path, task="detect")
+
+    print(f"Opening /dev/video{args.camera} at {args.width}x{args.height} ...")
+    cap = cv2.VideoCapture(args.camera)
+    if not cap.isOpened():
+        sys.exit(f"ERROR: Cannot open /dev/video{args.camera}\n"
+                 f"  Check the device exists: ls /dev/video*\n"
+                 f"  Try a different index:    edgeos-detect --camera 1")
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  args.width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Camera ready: {actual_w}x{actual_h}  |  Press Ctrl+C to stop\n")
+    time.sleep(0.5)
+
+    frame_n  = 0
+    fps_avg  = 0.0
+    t_start  = time.time()
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("ERROR: Lost camera feed.")
+                break
+
+            t0 = time.perf_counter()
+            results = model(frame, conf=args.conf, verbose=False)
+            elapsed = time.perf_counter() - t0
+
+            frame_n += 1
+            fps_inst = 1.0 / elapsed if elapsed > 0 else 0.0
+            fps_avg  = fps_avg * 0.85 + fps_inst * 0.15
+            runtime  = time.time() - t_start
+
+            boxes = results[0].boxes
+            names = model.names
+
+            # Build sorted detection list
+            detections = []
+            for b in boxes:
+                cls_id = int(b.cls[0])
+                conf   = float(b.conf[0])
+                detections.append((names[cls_id], conf))
+            detections.sort(key=lambda x: x[1], reverse=True)
+
+            clear_screen()
+            W = 54
+            print("┌" + "─" * W + "┐")
+            print(f"│  EdgeOS Object Detection Demo{' ' * (W - 30)}│")
+            print("├" + "─" * W + "┤")
+            print(f"│  Camera : /dev/video{args.camera:<3}  Resolution: {actual_w}x{actual_h:<8}│")
+            print(f"│  Frame  : {frame_n:<6}       Runtime:  {runtime:>6.0f}s          │")
+            print(f"│  Latency: {elapsed*1000:>5.1f} ms     FPS (avg): {fps_avg:>5.1f}           │")
+            print(f"│  Conf.  : >{args.conf:.0%}           Model: YOLOv8n ONNX    │")
+            print("├" + "─" * W + "┤")
+            print(f"│  {'Object':<22} {'Confidence':>12}  {'Bar':<14}  │")
+            print("├" + "─" * W + "┤")
+
+            if not detections:
+                print(f"│  {'(nothing detected above threshold)':<{W - 2}}│")
+            else:
+                for label, conf in detections[:8]:
+                    filled = int(conf * 14)
+                    bar    = "█" * filled + "░" * (14 - filled)
+                    print(f"│  {label:<22} {conf:>11.1%}  {bar}  │")
+
+            print("└" + "─" * W + "┘")
+            print("  Ctrl+C to stop  │  --conf to adjust threshold  │  --camera N for other device")
+
+    except KeyboardInterrupt:
+        print("\n\nStopped. Total frames processed:", frame_n)
+    finally:
+        cap.release()
+
+
+def main():
+    args = parse_args()
+    if args.list_cameras:
+        list_cameras()
+        return
+    run(args)
+
+
+if __name__ == "__main__":
+    main()
