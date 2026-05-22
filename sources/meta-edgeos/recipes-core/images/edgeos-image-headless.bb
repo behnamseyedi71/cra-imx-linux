@@ -100,6 +100,22 @@ IMAGE_INSTALL:append = " \
     iproute2 \
 "
 
+# ── WiFi + Bluetooth (NXP IW416 M.2 combo module via usdhc1 SDIO) ────────────
+# IW416 is the M.2 WiFi+BT module fitted on the i.MX8MP EVK.
+# firmware-nxp-wifi-nxpiw416-sdio provides the per-chip SDIO firmware blobs.
+# kernel-module-nxp-wlan provides the mlan/moal kernel driver.
+# connman is the recommended lightweight connection manager for headless devices.
+IMAGE_INSTALL:append = " \
+    firmware-nxp-wifi-nxpiw416-sdio \
+    kernel-module-nxp-wlan \
+    wpa-supplicant \
+    wireless-tools \
+    iw \
+    bluez5 \
+    connman \
+    connman-client \
+"
+
 # ── ROS2 Humble base stack ────────────────────────────────────────────────────
 # ros-base is the minimal ROS2 metapackage (rclcpp, rclpy, std_msgs, etc.)
 IMAGE_INSTALL:append = " \
