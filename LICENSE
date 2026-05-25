@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-----------------------------------------------------------------------------
-
-The MIT license above covers only the files originally written for this
-repository: the meta-edgeos Yocto layer, the demo CLIs (edgeos-detect,
-edgeos-benchmark, edgeos-perfctl), the host helper scripts under bin/, the
-build configuration under build-edgeos-headless/conf/, and the documentation.
-
-Everything else fetched by `repo sync` (poky, meta-imx, meta-openembedded,
-meta-ros, etc.) keeps its own original license. The image produced by the
-build bundles a lot of third-party software whose licenses have practical
-consequences for redistribution. See THIRD_PARTY_NOTICES.md for the items
-that matter.

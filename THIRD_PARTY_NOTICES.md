@@ -9,6 +9,19 @@ config.
 This file lists the components whose licenses have real practical consequences
 for anyone redistributing the image or a device that runs it.
 
+## What the MIT LICENSE in this repo covers
+
+The [LICENSE](LICENSE) file at the root of this repository applies only to the
+files originally written for this project: the `meta-edgeos` Yocto layer, the
+demo CLIs (`edgeos-detect`, `edgeos-benchmark`, `edgeos-perfctl`), the host
+helper scripts under `bin/`, the build configuration in
+`build-edgeos-headless/conf/`, and the documentation.
+
+Everything else fetched by `repo sync` (poky, meta-imx, meta-openembedded,
+meta-ros, etc.) keeps its own original license. The notices below cover the
+items from those upstream layers that have practical redistribution
+consequences.
+
 ## AGPL-3.0
 
 | Package | Source | License |
