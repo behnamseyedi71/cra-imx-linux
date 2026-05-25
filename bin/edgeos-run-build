@@ -1,0 +1,8 @@
+#!/bin/bash
+# edgeos-run-build: runs bitbake under a pty so the live progress bar
+# is captured into build.log. Tail the log in any terminal to watch:
+#     tail -F build-edgeos-headless/build.log
+cd "$(dirname "$(readlink -f "$0")")/.."
+# shellcheck disable=SC1091
+source setup-environment build-edgeos-headless > /dev/null 2>&1 || exit 1
+exec bitbake edgeos-image-headless

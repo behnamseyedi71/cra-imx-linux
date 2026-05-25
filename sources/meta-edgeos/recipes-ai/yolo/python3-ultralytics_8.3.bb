@@ -1,6 +1,6 @@
-SUMMARY     = "Ultralytics YOLOv8 — object detection and image segmentation"
-DESCRIPTION = "Ultralytics YOLO framework. Deployed in inference-only mode \
-on i.MX8MP using the ONNX Runtime backend with NXP VX NPU delegate."
+SUMMARY     = "Ultralytics YOLOv8 (object detection and segmentation)"
+DESCRIPTION = "Ultralytics YOLO framework, deployed in inference-only mode \
+on i.MX8MP using the ONNX Runtime backend with the NXP VX NPU delegate."
 HOMEPAGE    = "https://github.com/ultralytics/ultralytics"
 LICENSE     = "AGPL-3.0-only"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=eb1e647870add0502f8f010b19de32af"
@@ -18,7 +18,7 @@ do_configure:prepend() {
     sed -i 's/setuptools>=70\.0\.0/setuptools>=69.0.0/' ${S}/pyproject.toml
 }
 
-# ── Runtime dependencies (inference path only — no PyTorch training stack) ───
+# Runtime deps for the inference path only. No PyTorch training stack.
 RDEPENDS:${PN} = " \
     python3-core \
     python3-numpy \
@@ -32,7 +32,7 @@ RDEPENDS:${PN} = " \
 "
 
 # Silence ultralytics' torch-not-found warning at runtime.
-# Also strip training-only data-download shell scripts — they require /bin/bash
+# Also strip training-only data-download shell scripts. They require /bin/bash
 # which is not a runtime dep for an inference-only deployment.
 do_install:append() {
     install -d ${D}${sysconfdir}/profile.d

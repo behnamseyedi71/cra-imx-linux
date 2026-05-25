@@ -1,4 +1,4 @@
-# ── Build output (gigabytes, never commit) ────────────────────────────────────
+# Build output (gigabytes, never commit)
 build-edgeos-headless/tmp/
 build-edgeos-headless/sstate-cache/
 build-edgeos-headless/cache/
@@ -7,17 +7,17 @@ build-edgeos-headless/bitbake.lock
 build-edgeos-headless/bitbake.sock
 build-edgeos-headless/*.log
 
-# ── Auto-generated build conf backups ────────────────────────────────────────
+# Auto-generated build conf backups
 build-edgeos-headless/conf/*.org
 build-edgeos-headless/conf/*.sample
 build-edgeos-headless/conf/conf-notes.txt
 build-edgeos-headless/conf/conf-summary.txt
 build-edgeos-headless/conf/templateconf.cfg
 
-# ── Downloaded source archives ────────────────────────────────────────────────
+# Downloaded source archives
 downloads/
 
-# ── Upstream layers managed by repo tool (not ours to commit) ────────────────
+# Upstream layers managed by the repo tool (not ours to commit)
 sources/poky/
 sources/meta-openembedded/
 sources/meta-clang/
@@ -36,11 +36,14 @@ sources/meta-nxp-connectivity/
 sources/meta-nxp-demo-experience/
 sources/meta-ros/
 
-# ── Workspace-level caches (moved out of build dir for persistence) ──────────
+# Workspace-level caches (moved out of the build dir to survive a wipe)
 sstate-cache/
 
-# ── repo tool internal state ──────────────────────────────────────────────────
+# repo tool internal state
 .repo/
 
-# ── Claude Code memory / session state ───────────────────────────────────────
-.claude/
+# Local editor / IDE state
+.vscode/
+.idea/
+*.swp
+.DS_Store

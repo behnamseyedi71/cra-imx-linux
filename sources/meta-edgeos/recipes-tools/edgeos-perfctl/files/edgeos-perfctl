@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-edgeos-perfctl — CPU, GPU, NPU and memory frequency control for i.MX8MP
+edgeos-perfctl: CPU, GPU, NPU and memory frequency control for i.MX8MP
 
 Usage:
   edgeos-perfctl status       Show current frequencies, governors, temperatures
@@ -13,15 +13,16 @@ Usage:
 
 Notes:
   - 'max' mode locks all 4 A53 cores at 1800 MHz and GPU/NPU/DDR at peak.
-  - 'max' increases power draw and board temperature — ensure adequate cooling.
-  - The i.MX8MP A53 hard ceiling is 1800 MHz (NXP silicon specification).
-    Going beyond requires DT changes and risks hardware damage.
+  - 'max' increases power draw and board temperature. Make sure the
+    heatsink and fan on the EVK are working.
+  - The i.MX8MP A53 hard ceiling is 1800 MHz (NXP silicon spec). Going
+    beyond it requires DT changes and risks hardware damage.
   - Run 'systemctl enable edgeos-performance' to apply 'max' on every boot.
 """
 
 import os, sys, glob, time, argparse, subprocess
 
-# ── Sysfs helpers ──────────────────────────────────────────────────────────────
+# Sysfs helpers
 
 def write_sysfs(path, value):
     try:
@@ -53,7 +54,7 @@ def read_int(path, default=0):
         return default
 
 
-# ── CPU frequency ──────────────────────────────────────────────────────────────
+# CPU frequency
 
 def cpu_paths():
     return sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq"))
@@ -83,20 +84,20 @@ def get_cpu_info():
     return rows
 
 
-# ── CPU idle states ────────────────────────────────────────────────────────────
+# CPU idle states
 
 def idle_state_paths():
     return sorted(glob.glob("/sys/devices/system/cpu/cpu*/cpuidle/state*"))
 
 
 def set_idle_states(enabled):
-    # enabled=True  → allow idle (normal)
-    # enabled=False → disable idle (minimum latency)
+    # enabled=True  -> allow idle (normal)
+    # enabled=False -> disable idle (minimum latency)
     disable_val = "0" if enabled else "1"
     count = 0
     for p in idle_state_paths():
         name = read_sysfs(f"{p}/name", "")
-        # Skip WFI (state0) — that's just a normal halt, always needed
+        # Skip WFI (state0). That's just a normal halt and is always needed.
         if name in ("WFI", ""):
             continue
         disable_file = f"{p}/disable"
@@ -104,7 +105,7 @@ def set_idle_states(enabled):
             write_sysfs(disable_file, disable_val)
             count += 1
     state = "disabled (low-latency mode)" if not enabled else "enabled (normal power)"
-    print(f"  CPU deep-idle states → {state} ({count} states affected)")
+    print(f"  CPU deep-idle states -> {state} ({count} states affected)")
 
 
 def get_idle_info():
@@ -117,7 +118,7 @@ def get_idle_info():
     return rows
 
 
-# ── devfreq (GPU / NPU / DDR) ─────────────────────────────────────────────────
+# devfreq (GPU / NPU / DDR)
 
 DEVFREQ_NAMES = {
     "gpu": "GPU (Vivante GC7000UL)",
@@ -154,11 +155,11 @@ def set_devfreq_governor(governor):
                 write_sysfs(f"{p}/governor", "userspace")
                 max_hz = read_sysfs(f"{p}/max_freq", "0")
                 write_sysfs(f"{p}/userspace/set_freq", max_hz)
-                print(f"  {label:<35} → userspace @ max ({int(max_hz)//1000000} MHz)")
+                print(f"  {label:<35} -> userspace @ max ({int(max_hz)//1000000} MHz)")
             continue
         if write_sysfs(f"{p}/governor", governor):
             cur = read_int(f"{p}/cur_freq")
-            print(f"  {label:<35} → {governor} ({cur // 1000000} MHz)")
+            print(f"  {label:<35} -> {governor} ({cur // 1000000} MHz)")
 
 
 def get_devfreq_info():
@@ -172,7 +173,7 @@ def get_devfreq_info():
     return rows
 
 
-# ── Thermal zones ──────────────────────────────────────────────────────────────
+# Thermal zones
 
 def get_thermal_info():
     rows = []
@@ -183,12 +184,12 @@ def get_thermal_info():
     return rows
 
 
-# ── Commands ───────────────────────────────────────────────────────────────────
+# Commands
 
 def cmd_status():
     W = 62
     print("┌" + "─" * W + "┐")
-    print(f"│  edgeos-perfctl — i.MX8MP Performance Status{' '*(W-46)}│")
+    print(f"│  edgeos-perfctl: i.MX8MP performance status{' '*(W-45)}│")
     print("├" + "─" * W + "┤")
 
     print(f"│  {'CPU CORES':<{W-2}}│")
@@ -234,7 +235,7 @@ def cmd_max():
     set_devfreq_governor("performance")
     print()
     print("Done. All cores locked at 1800 MHz.")
-    print("NOTE: Monitor temperature — ensure EVK heatsink/fan is functional.")
+    print("NOTE: Watch the temperature. Make sure the EVK heatsink and fan are working.")
     print("      Run 'edgeos-perfctl status' to verify or 'edgeos-perfctl monitor' to watch live.")
 
 
@@ -255,7 +256,7 @@ def cmd_idle(enable):
 
 
 def cmd_monitor():
-    print("Live monitor — Ctrl+C to stop\n")
+    print("Live monitor. Ctrl+C to stop.\n")
     try:
         while True:
             print("\033[2J\033[H", end="")
@@ -276,7 +277,7 @@ def cmd_monitor():
             thermal = get_thermal_info()
             print(f"  TEMP {'Zone':<25}  {'°C':>6}  Status")
             for ttype, temp in thermal:
-                status = "⚠ HOT" if temp > 85 else ("↑ WARM" if temp > 65 else "✓ OK")
+                status = "HOT " if temp > 85 else ("WARM" if temp > 65 else "OK  ")
                 bar    = "█" * min(25, int(temp / 4))
                 print(f"       {ttype:<25}  {temp:>5.1f}  {status}  {bar}")
 
@@ -292,7 +293,7 @@ def cmd_monitor():
         print("\nStopped.")
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+# Entry point
 
 def main():
     p = argparse.ArgumentParser(add_help=False)

@@ -1,23 +1,48 @@
 #!/usr/bin/env python3
 """
 EdgeOS Object Detection Demo
-USB webcam → YOLOv8n inference → live terminal output
+USB webcam -> YOLOv8n inference (onnxruntime) -> live terminal output
+
+Pure onnxruntime + OpenCV implementation. Does NOT import ultralytics or torch
+so it runs on a minimal inference-only image.
+
+By default the script runs YOLO inference on the i.MX8MP NPU (VSI NPU
+execution provider). Pass --cpu to force CPU.
 
 Usage:
-  edgeos-detect                  # default camera /dev/video0
+  edgeos-detect                  # default camera /dev/video0, NPU backend
+  edgeos-detect --cpu            # force CPU inference
   edgeos-detect --camera 1       # use /dev/video1
   edgeos-detect --conf 0.3       # lower confidence threshold
-  edgeos-detect --width 320 --height 240   # lower resolution for more FPS
+  edgeos-detect --width 320 --height 240   # lower capture resolution
   edgeos-detect --list-cameras   # show available video devices
 """
 
 import os, sys, time, argparse
 
-os.environ.setdefault("YOLO_SKIP_TORCH_CHECK", "1")
-
 MODEL_DIR  = "/var/lib/edgeos-demo"
 MODEL_FILE = os.path.join(MODEL_DIR, "yolov8n.onnx")
-MODEL_URL  = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx"
+
+# YOLOv8 input geometry (matches the official yolov8n.onnx export at imgsz=640).
+INPUT_SIZE = 640
+IOU_THRESH = 0.45
+
+# COCO 80-class label set used by stock yolov8n.
+COCO_NAMES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
+    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
+    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
+    "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon",
+    "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant",
+    "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
+    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+    "hair drier", "toothbrush",
+]
 
 
 def parse_args():
@@ -27,6 +52,7 @@ def parse_args():
     p.add_argument("--width",        type=int,   default=640,  help="Capture width (default: 640)")
     p.add_argument("--height",       type=int,   default=480,  help="Capture height (default: 480)")
     p.add_argument("--list-cameras", action="store_true",      help="List available video devices and exit")
+    p.add_argument("--cpu",          action="store_true",      help="Force CPU inference (default: NPU)")
     return p.parse_args()
 
 
@@ -42,52 +68,137 @@ def list_cameras():
 
 
 def ensure_model():
+    """The model is shipped inside the edgeos-demo package and lives at
+    /var/lib/edgeos-demo/yolov8n.onnx on a stock rootfs. No download needed.
+    If the file is missing the package is broken; tell the user how to restore."""
     if os.path.exists(MODEL_FILE):
         return MODEL_FILE
 
-    print(f"Model not found at {MODEL_FILE}")
-    print(f"Downloading YOLOv8n ONNX model (~12 MB) ...")
+    sys.exit(
+        f"ERROR: YOLO model missing at {MODEL_FILE}\n"
+        f"  The model is shipped with the edgeos-demo package and is normally\n"
+        f"  pre-installed by the image. Restore it with:\n"
+        f"      opkg install --force-reinstall edgeos-demo\n"
+        f"  Or copy a fresh yolov8n.onnx into {MODEL_DIR}/ manually."
+    )
 
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    try:
-        import urllib.request
-        tmp = MODEL_FILE + ".tmp"
-        def progress(count, block, total):
-            pct = min(100, count * block * 100 // total)
-            print(f"\r  {pct}% ", end="", flush=True)
-        urllib.request.urlretrieve(MODEL_URL, tmp, reporthook=progress)
-        print()
-        os.rename(tmp, MODEL_FILE)
-        print(f"Model saved to {MODEL_FILE}")
-    except Exception as e:
-        print(f"\nDownload failed: {e}")
-        print()
-        print("To download manually on another machine:")
-        print(f"  wget {MODEL_URL}")
-        print(f"  scp yolov8n.onnx root@<board-ip>:{MODEL_FILE}")
-        sys.exit(1)
 
-    return MODEL_FILE
+def letterbox(img, new_size=INPUT_SIZE, pad_value=114):
+    """Resize to new_size x new_size preserving aspect ratio; pad with pad_value."""
+    import cv2, numpy as np
+    h, w = img.shape[:2]
+    scale = min(new_size / h, new_size / w)
+    nh, nw = int(round(h * scale)), int(round(w * scale))
+    resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    canvas = np.full((new_size, new_size, 3), pad_value, dtype=np.uint8)
+    top  = (new_size - nh) // 2
+    left = (new_size - nw) // 2
+    canvas[top:top + nh, left:left + nw] = resized
+    return canvas, scale, left, top
+
+
+def nms(boxes, scores, iou_thresh):
+    """Pure-numpy NMS. boxes are (x1, y1, x2, y2)."""
+    import numpy as np
+    if len(boxes) == 0:
+        return []
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1).clip(min=0) * (y2 - y1).clip(min=0)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        if order.size == 1:
+            break
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        inter = (xx2 - xx1).clip(min=0) * (yy2 - yy1).clip(min=0)
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
+        order = order[1:][iou <= iou_thresh]
+    return keep
+
+
+def postprocess(output, conf_thresh):
+    """
+    YOLOv8 ONNX raw output: shape (1, 84, 8400). 4 box coords + 80 class scores
+    per prediction, no separate objectness. Returns a list of (class_id, score).
+    """
+    import numpy as np
+    preds = output[0].T                  # -> (8400, 84)
+    class_scores = preds[:, 4:]          # (8400, 80)
+    class_ids = class_scores.argmax(axis=1)
+    scores = class_scores.max(axis=1)
+
+    mask = scores >= conf_thresh
+    if not mask.any():
+        return []
+
+    boxes_cxcywh = preds[mask, :4]
+    scores = scores[mask]
+    class_ids = class_ids[mask]
+
+    cx, cy, w, h = boxes_cxcywh.T
+    x1 = cx - w / 2
+    y1 = cy - h / 2
+    x2 = cx + w / 2
+    y2 = cy + h / 2
+    boxes = np.stack([x1, y1, x2, y2], axis=1)
+
+    keep = nms(boxes, scores, IOU_THRESH)
+    return [(int(class_ids[i]), float(scores[i])) for i in keep]
 
 
 def clear_screen():
     print("\033[2J\033[H", end="", flush=True)
 
 
+def pick_providers(ort, force_cpu):
+    """Prefer the NXP VSI NPU execution provider; fall back to CPU."""
+    available = ort.get_available_providers()
+    if force_cpu:
+        return ["CPUExecutionProvider"], "CPU (forced via --cpu)"
+
+    # NXP eIQ ships the VSI NPU EP as "VsiNpuExecutionProvider" in their
+    # onnxruntime build for i.MX8MP. Newer builds may expose it under a
+    # different short name; accept either spelling.
+    for npu_name in ("VsiNpuExecutionProvider", "VSINPUExecutionProvider"):
+        if npu_name in available:
+            return [npu_name, "CPUExecutionProvider"], f"NPU ({npu_name})"
+
+    return ["CPUExecutionProvider"], (
+        "CPU (NPU provider not in this onnxruntime build. "
+        "Available: " + ", ".join(available) + ")"
+    )
+
+
 def run(args):
     try:
         import cv2
-    except ImportError:
-        sys.exit("ERROR: OpenCV not found. Run: apt install python3-opencv")
+        import numpy as np
+    except ImportError as e:
+        sys.exit(f"ERROR: required Python module missing ({e}). "
+                 f"Expected python3-opencv and python3-numpy on the rootfs.")
     try:
-        from ultralytics import YOLO
-    except ImportError:
-        sys.exit("ERROR: ultralytics not found. Run: apt install python3-ultralytics")
+        import onnxruntime as ort
+    except ImportError as e:
+        sys.exit(f"ERROR: onnxruntime not found ({e}). "
+                 f"Expected the onnxruntime package on the rootfs.")
 
     model_path = ensure_model()
-
+    providers, backend_label = pick_providers(ort, args.cpu)
     print(f"Loading model: {model_path}")
-    model = YOLO(model_path, task="detect")
+    print(f"Inference backend: {backend_label}")
+    sess = ort.InferenceSession(model_path, providers=providers)
+    input_name = sess.get_inputs()[0].name
+    # Record which provider actually got selected (NPU may silently fall back
+    # for unsupported ops; ORT reports the active list per-node via the session).
+    active = sess.get_providers()
+    if active and active[0] != providers[0]:
+        print(f"NOTE: onnxruntime selected {active[0]} instead of requested {providers[0]}.")
+    backend_short = "NPU" if active and active[0].lower().startswith("vsi") else "CPU"
 
     print(f"Opening /dev/video{args.camera} at {args.width}x{args.height} ...")
     cap = cv2.VideoCapture(args.camera)
@@ -104,9 +215,9 @@ def run(args):
     print(f"Camera ready: {actual_w}x{actual_h}  |  Press Ctrl+C to stop\n")
     time.sleep(0.5)
 
-    frame_n  = 0
-    fps_avg  = 0.0
-    t_start  = time.time()
+    frame_n = 0
+    fps_avg = 0.0
+    t_start = time.time()
 
     try:
         while True:
@@ -116,34 +227,31 @@ def run(args):
                 break
 
             t0 = time.perf_counter()
-            results = model(frame, conf=args.conf, verbose=False)
+
+            img, _scale, _left, _top = letterbox(frame, INPUT_SIZE)
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            blob = (rgb.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
+
+            outputs = sess.run(None, {input_name: blob})
+            detections = postprocess(outputs[0], args.conf)
+
             elapsed = time.perf_counter() - t0
+            detections.sort(key=lambda x: x[1], reverse=True)
 
             frame_n += 1
             fps_inst = 1.0 / elapsed if elapsed > 0 else 0.0
             fps_avg  = fps_avg * 0.85 + fps_inst * 0.15
             runtime  = time.time() - t_start
 
-            boxes = results[0].boxes
-            names = model.names
-
-            # Build sorted detection list
-            detections = []
-            for b in boxes:
-                cls_id = int(b.cls[0])
-                conf   = float(b.conf[0])
-                detections.append((names[cls_id], conf))
-            detections.sort(key=lambda x: x[1], reverse=True)
-
             clear_screen()
             W = 54
             print("┌" + "─" * W + "┐")
-            print(f"│  EdgeOS Object Detection Demo{' ' * (W - 30)}│")
+            print(f"│  EdgeOS object detection demo{' ' * (W - 30)}│")
             print("├" + "─" * W + "┤")
             print(f"│  Camera : /dev/video{args.camera:<3}  Resolution: {actual_w}x{actual_h:<8}│")
             print(f"│  Frame  : {frame_n:<6}       Runtime:  {runtime:>6.0f}s          │")
             print(f"│  Latency: {elapsed*1000:>5.1f} ms     FPS (avg): {fps_avg:>5.1f}           │")
-            print(f"│  Conf.  : >{args.conf:.0%}           Model: YOLOv8n ONNX    │")
+            print(f"│  Conf.  : >{args.conf:.0%}   Backend: {backend_short:<3}   Model: YOLOv8n  │")
             print("├" + "─" * W + "┤")
             print(f"│  {'Object':<22} {'Confidence':>12}  {'Bar':<14}  │")
             print("├" + "─" * W + "┤")
@@ -151,13 +259,14 @@ def run(args):
             if not detections:
                 print(f"│  {'(nothing detected above threshold)':<{W - 2}}│")
             else:
-                for label, conf in detections[:8]:
+                for cls_id, conf in detections[:8]:
+                    label  = COCO_NAMES[cls_id] if 0 <= cls_id < len(COCO_NAMES) else f"cls{cls_id}"
                     filled = int(conf * 14)
                     bar    = "█" * filled + "░" * (14 - filled)
                     print(f"│  {label:<22} {conf:>11.1%}  {bar}  │")
 
             print("└" + "─" * W + "┘")
-            print("  Ctrl+C to stop  │  --conf to adjust threshold  │  --camera N for other device")
+            print("  Ctrl+C to stop  |  --conf to adjust threshold  |  --camera N for other device")
 
     except KeyboardInterrupt:
         print("\n\nStopped. Total frames processed:", frame_n)

@@ -1,0 +1,73 @@
+#!/bin/bash
+# edgeos-host-setup: one-shot pre-build tuning for a 32 GB host.
+#
+# Run once as root before the first bitbake:
+#   sudo bin/edgeos-host-setup
+#
+# What it does:
+#   1. Creates /swapfile_edgeos (32 GB) if it does not already exist
+#      and enables it. With 32 GB RAM + 32 GB swap the onnxruntime/TFLite
+#      link phases stay alive instead of being OOM-killed.
+#   2. Sets vm.overcommit_memory=1 so make/ninja's large mmap() requests
+#      are honoured (the default heuristic refuses safe allocations and
+#      causes spurious OOMs on large C++ links).
+#   3. Sets vm.swappiness=10 so the kernel only spills to swap under real
+#      memory pressure, not opportunistically.
+#
+# The sysctl values are NOT persisted across reboots. Re-run the script
+# after a reboot, or copy the lines below into /etc/sysctl.d/.
+
+set -euo pipefail
+
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: must be run as root (try: sudo $0)" >&2
+    exit 1
+fi
+
+SWAPFILE="/swapfile_edgeos"
+SWAP_SIZE_GB=32
+
+# 1. Swapfile
+if [[ ! -f "$SWAPFILE" ]]; then
+    echo "Creating ${SWAP_SIZE_GB} GB swapfile at $SWAPFILE ..."
+    # fallocate is much faster than dd when the filesystem supports it
+    # (ext4, xfs). Fall back to dd otherwise.
+    if ! fallocate -l "${SWAP_SIZE_GB}G" "$SWAPFILE" 2>/dev/null; then
+        echo "fallocate not supported on this filesystem; using dd (slow) ..."
+        dd if=/dev/zero of="$SWAPFILE" bs=1M count=$((SWAP_SIZE_GB * 1024)) \
+            status=progress
+    fi
+    chmod 600 "$SWAPFILE"
+    mkswap "$SWAPFILE" >/dev/null
+fi
+
+if ! swapon --show=NAME --noheadings | grep -qx "$SWAPFILE"; then
+    swapon "$SWAPFILE"
+    echo "Swap enabled. Active swap devices:"
+    swapon --show
+else
+    echo "Swap already active at $SWAPFILE."
+fi
+
+# 2 & 3. sysctls
+echo "Tuning kernel: vm.overcommit_memory=1, vm.swappiness=10 ..."
+sysctl -w vm.overcommit_memory=1
+sysctl -w vm.swappiness=10
+
+cat <<'EOF'
+
+Host tuning complete.
+
+To make the sysctls survive a reboot, drop a file at
+/etc/sysctl.d/99-edgeos-build.conf containing:
+
+    vm.overcommit_memory = 1
+    vm.swappiness        = 10
+
+To make the swapfile survive a reboot, add this line to /etc/fstab:
+
+    /swapfile_edgeos none swap sw 0 0
+
+You can now start the build:
+    cd build-edgeos-headless && bitbake edgeos-image-headless
+EOF

@@ -4,6 +4,7 @@
 # because Yocto disables meson wrap fetching at build time.
 #
 # Pipelines kept:
-#   simple  — generic V4L2 pipeline, covers the i.MX8MP ISI/MIPI-CSI camera
-#   uvcusb  — USB UVC cameras (useful for development)
+#   imx8-isi  on-board ISI / MIPI-CSI camera for the i.MX8M Plus
+#   simple    generic V4L2 pipeline
+#   uvcvideo  USB UVC webcams (useful for development)
 LIBCAMERA_PIPELINES = "imx8-isi,simple,uvcvideo"

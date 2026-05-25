@@ -1,5 +1,5 @@
 [Unit]
-Description=EdgeOS — lock CPU/GPU/NPU/DDR to maximum frequency
+Description=EdgeOS: lock CPU/GPU/NPU/DDR to maximum frequency
 After=multi-user.target
 
 [Service]

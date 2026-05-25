@@ -15,7 +15,7 @@ S = "${WORKDIR}"
 
 inherit systemd
 
-# Service is installed but NOT enabled by default — user must opt in with:
+# Service is installed but NOT enabled by default. The user has to opt in:
 #   systemctl enable edgeos-performance
 SYSTEMD_SERVICE:${PN} = "edgeos-performance.service"
 SYSTEMD_AUTO_ENABLE = "disable"

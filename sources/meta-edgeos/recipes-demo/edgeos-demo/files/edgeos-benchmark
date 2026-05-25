@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-EdgeOS System & ML Benchmark
-Tests CPU, memory, storage I/O, and YOLOv8n inference performance.
+edgeos-benchmark: system and ML benchmark for EdgeOS.
+
+Covers CPU, memory bandwidth, storage I/O and YOLOv8n inference latency.
 
 Usage:
-  edgeos-benchmark              # run all benchmarks
-  edgeos-benchmark --quick      # shorter runs (fewer iterations)
-  edgeos-benchmark --no-ml      # skip ML benchmark (faster)
+  edgeos-benchmark              run all benchmarks
+  edgeos-benchmark --quick      shorter runs (fewer iterations)
+  edgeos-benchmark --no-ml      skip the ML benchmark
 """
 
 import os, sys, time, argparse, platform, subprocess, array
@@ -32,7 +33,7 @@ def run_cmd(cmd):
         return "N/A"
 
 
-def divider(char="─", width=60):
+def divider(char="-", width=60):
     print(char * width)
 
 
@@ -46,7 +47,7 @@ def section_result(label, value, unit=""):
     print(f"  {label:<35} {value} {unit}")
 
 
-# ── System info ───────────────────────────────────────────────────────────────
+# System info
 
 def bench_sysinfo():
     header("SYSTEM INFORMATION")
@@ -69,10 +70,10 @@ def bench_sysinfo():
     section_result("Root disk",       disk)
 
 
-# ── CPU benchmark ─────────────────────────────────────────────────────────────
+# CPU benchmark
 
 def bench_cpu(quick=False):
-    header("CPU BENCHMARK — Float arithmetic (single core)")
+    header("CPU BENCHMARK: float arithmetic (single core)")
 
     N = 2_000_000 if quick else 10_000_000
     print(f"  Running {N/1e6:.0f}M iterations of mixed float ops ...")
@@ -92,10 +93,10 @@ def bench_cpu(quick=False):
     section_result("Est. all-core",f"~{mops * os.cpu_count():.0f} MOPS", "(theoretical)")
 
 
-# ── Memory bandwidth ──────────────────────────────────────────────────────────
+# Memory bandwidth
 
 def bench_memory(quick=False):
-    header("MEMORY BENCHMARK — Sequential bandwidth")
+    header("MEMORY BENCHMARK: sequential bandwidth")
 
     SIZE_MB = 32 if quick else 128
     SIZE    = SIZE_MB * 1024 * 1024
@@ -123,10 +124,10 @@ def bench_memory(quick=False):
     _ = s  # prevent optimizer removal
 
 
-# ── Storage I/O ───────────────────────────────────────────────────────────────
+# Storage I/O
 
 def bench_storage(quick=False):
-    header("STORAGE I/O BENCHMARK — Sequential write/read")
+    header("STORAGE I/O BENCHMARK: sequential write/read")
 
     SIZE_MB = 32 if quick else 128
     chunk   = 4 * 1024 * 1024  # 4 MB chunks
@@ -156,7 +157,7 @@ def bench_storage(quick=False):
     section_result("Read speed",   f"{read_bw:.1f} MB/s")
 
 
-# ── ONNX Runtime info ─────────────────────────────────────────────────────────
+# ONNX Runtime info
 
 def bench_ort_info():
     header("ONNX RUNTIME")
@@ -168,12 +169,12 @@ def bench_ort_info():
         section_result("Status", "NOT INSTALLED")
 
 
-# ── ML inference ──────────────────────────────────────────────────────────────
+# ML inference
 
 def ensure_model():
     if os.path.exists(MODEL_FILE):
         return MODEL_FILE
-    print(f"  Model not at {MODEL_FILE} — downloading (~12 MB) ...")
+    print(f"  Model not at {MODEL_FILE}. Downloading (~12 MB) ...")
     os.makedirs(MODEL_DIR, exist_ok=True)
     try:
         import urllib.request
@@ -191,7 +192,7 @@ def ensure_model():
 
 
 def bench_ml(quick=False):
-    header("ML INFERENCE BENCHMARK — YOLOv8n ONNX (CPU)")
+    header("ML INFERENCE BENCHMARK: YOLOv8n ONNX (CPU)")
 
     try:
         import numpy as np
@@ -219,7 +220,7 @@ def bench_ml(quick=False):
 
         runs  = 10 if quick else 30
         times = []
-        print(f"  Benchmarking {w}x{h} — {runs} runs ...")
+        print(f"  Benchmarking {w}x{h}, {runs} runs ...")
         for _ in range(runs):
             t0 = time.perf_counter()
             model(dummy, verbose=False)
@@ -238,7 +239,7 @@ def bench_ml(quick=False):
         print()
 
 
-# ── stress-ng hint ────────────────────────────────────────────────────────────
+# stress-ng hint
 
 def stress_hint():
     header("HARDWARE STRESS TEST (stress-ng)")
@@ -254,19 +255,19 @@ def stress_hint():
         print("  # Full system stress:")
         print("  stress-ng --all 0 --timeout 60 --metrics-brief")
     else:
-        print("  stress-ng not found (should be pre-installed — check image build).")
+        print("  stress-ng not found. It should be pre-installed; check the image build.")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# Main
 
 def main():
     args = parse_args()
     t_total = time.time()
 
-    divider("═")
-    print("  EdgeOS System & ML Benchmark")
+    divider("=")
+    print("  EdgeOS system and ML benchmark")
     print(f"  {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    divider("═")
+    divider("=")
     print()
 
     bench_sysinfo()
