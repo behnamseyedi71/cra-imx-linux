@@ -8,6 +8,7 @@ first boot without an internet connection."
 # from ultralytics weights and inherits the upstream ultralytics AGPL-3.0
 # licence; declare both so SPDX SBOM reflects reality.
 LICENSE     = "MIT & AGPL-3.0-only"
+PR          = "r1"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302 \
                     file://${COMMON_LICENSE_DIR}/AGPL-3.0-only;md5=73f1eb20517c55bf9493b7dd6e480788"
 

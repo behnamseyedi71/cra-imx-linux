@@ -4,6 +4,7 @@ DESCRIPTION = "Provides edgeos-perfctl: locks all 4 Cortex-A53 cores at 1800 MHz
 GPU/NPU/DDR devfreq governors to performance mode. Includes a systemd service for \
 applying max performance on boot and a live monitor dashboard."
 LICENSE     = "MIT"
+PR          = "r1"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 SRC_URI = " \
